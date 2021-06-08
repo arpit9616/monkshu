@@ -5,8 +5,8 @@
  * License: See enclosed file.
  */
 
+const extensions = [];
 const fs = require("fs");
-const url = require("url");
 const zlib = require("zlib");
 const path = require("path");
 const http = require("http");
@@ -21,12 +21,11 @@ if (require("cluster").isMaster == true) bootstrap();
 function bootstrap() {
 	_initConfSync();
 	_initLogsSync();
-
-	const crypt = require(`${conf.libdir}/crypt.js`);
+	_initExtensions();
 
 	/* Start HTTP/S server */
-	const listener = (req, res) => { try{_handleRequest(req, res);} catch(e){error.error(e.stack?e.stack.toString():e.toString()); _sendError(req,res,500,e);} }
-	const options = conf.ssl ? {pfx: fs.readFileSync(conf.pfxPath), passphrase: crypt.decrypt(conf.pfxPassphrase)} : null;
+	const listener = async (req, res) => { try{await _handleRequest(req, res);} catch(e){error.error(e.stack?e.stack.toString():e.toString()); _sendError(req,res,500,e);} }
+	const options = conf.ssl ? {key: fs.readFileSync(conf.sslKeyFile), cert: fs.readFileSync(conf.sslCertFile)} : null;
 	const httpd = options ? https.createServer(options, listener) : http.createServer(listener);
 	httpd.setTimeout(conf.timeout);
 	httpd.listen(conf.port, conf.host||"::");
@@ -44,6 +43,18 @@ function _initConfSync() {
 	conf.libdir = path.resolve(conf.libdir);
 	conf.accesslog = path.resolve(conf.accesslog);
 	conf.errorlog = path.resolve(conf.errorlog);
+
+	// merge web app conf files into main http server, for app specific configuration directives
+	if (fs.existsSync(`${__dirname}/../apps/`)) for (const app of fs.readdirSync(`${__dirname}/../apps/`)) if (fs.existsSync(`${__dirname}/../apps/${app}/conf/httpd.json`)) {
+		const appHTTPDConf = require(`${__dirname}/../apps/${app}/conf/httpd.json`);
+		for (const confKey of Object.keys(appHTTPDConf)) {
+			const value = appHTTPDConf[confKey];
+			if (!global.conf[confKey]) {global.conf[confKey] = value; continue;}	// not set, then just set it
+			if (Array.isArray(value)) global.conf[confKey] = global.conf[confKey].concat(value);	// merge arrays
+			else if (typeof value === "object" && value !== null) global.conf[confKey] = {...global.conf[confKey], ...value};	// merge objects, app overrides
+			else global.conf[confKey] = value;	// override value
+		}
+	}
 }
 
 function _initLogsSync() {
@@ -58,13 +69,24 @@ function _initLogsSync() {
 	error = new Logger(conf.errorlog, 100*1024*1024);
 }
 
-function _handleRequest(req, res) {
+function _initExtensions() {
+	const extensions_dir = path.resolve(conf.extdir);
+	for (const extension of conf.extensions) {
+		console.log(`Loading extension ${extension}`);
+		const ext = require(`${extensions_dir}/${extension}.js`);  if (ext.initSync) ext.initSync();
+		extensions.push(ext);
+	}
+}
+
+async function _handleRequest(req, res) {
 	access.info(`From: ${_getReqHost(req)} Agent: ${req.headers["user-agent"]} GET: ${req.url}`);
+	for (const extension of extensions) if (await extension.processRequest(req, res, _sendData, _sendError)) {
+		access.info(`Request ${req.url} handled by extension ${extension.name}`);
+		return; // extension handled it
+	}
 
-	if (conf.server_redirect) {_sendRedirect(req, res); return;}
-
-	const pathname = url.parse(req.url).pathname;
-	let fileRequested = `${path.resolve(conf.webroot)}/${pathname}`;
+	const pathname = new URL(req.url, `http://${req.headers.host}/`).pathname;
+	let fileRequested = path.resolve(conf.webroot+"/"+pathname);
 
 	// don't allow reading outside webroot
 	if (!_isSubdirectory(fileRequested, conf.webroot))
@@ -126,6 +148,12 @@ function _sendError(req, res, code, message) {
 	res.end();
 }
 
+function _sendData(res, code, headers, data) {
+	res.writeHead(code||200, _getServerHeaders(headers));
+	if (data) res.write(data);
+	res.end();
+}
+
 function _isSubdirectory(child, parent) { // from: https://stackoverflow.com/questions/37521893/determine-if-a-path-is-subdirectory-of-another-in-node-js
 	child = path.resolve(child); parent = path.resolve(parent);
 
@@ -140,19 +168,4 @@ function _getReqHost(req) {
 	const host = req.headers["x-forwarded-for"]?req.headers["x-forwarded-for"]:req.headers["x-forwarded-host"]?req.headers["x-forwarded-host"]:req.socket.remoteAddress;
 	const port = req.headers["x-forwarded-port"]?req.headers["x-forwarded-port"]:req.socket.remotePort;
 	return `[${host}]:${port}`;
-}
-
-function _sendRedirect(req, res) {
-	const urlIn = url.parse(req.url), urlServer = url.parse(conf.server_redirect), isRedirectServer = urlServer.host == null;
-
-	const host = isRedirectServer ? conf.server_redirect : urlServer.host;
-	const protocol = !isRedirectServer ? (urlServer.protocol || urlIn.protocol || conf.ssl?"https:":"http:") : 
-		(urlIn.protocol || conf.ssl?"https:":"http:");
-	if (!isRedirectServer && !conf.server_redirect.endsWith(urlServer.pathname)) urlServer.pathname = null;
-	const pathname = !isRedirectServer ? (urlServer.pathname || urlIn.pathname || "") : (urlIn.pathname || "");
-	const search = !isRedirectServer ? (urlServer.search || urlIn.search || "") : (urlIn.search || "");
-	const redirectURL = `${protocol}//${host}${pathname}${search}`;
-	
-	res.writeHead(302, {"Location": redirectURL});
-	res.end();
 }

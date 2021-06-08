@@ -26,6 +26,8 @@ function register(name, htmlTemplate, module) {
         else await module.element.render(false);
     }
 
+    module.getData = id => id?module.datas[id]:module.data;
+
     module.getHostElement = element => module.trueWebComponentMode ? element.getRootNode().host : element.closest(name);
     module.getHostElementID = element => module.trueWebComponentMode ? element.getRootNode().host.id : element.closest(name).id;
 
@@ -64,6 +66,12 @@ function register(name, htmlTemplate, module) {
         return allInstances;
     }
 
+    module.reload = async id => {
+        module.clearMemory(id); 
+        if (module.elementConnected) await module.elementConnected(module.elements[id]); 
+        await module.elements[id].render(false);
+    }
+
     // register the web component
     if (!customElements.get(name)) customElements.define(name, class extends HTMLElement {
 
@@ -89,20 +97,20 @@ function register(name, htmlTemplate, module) {
             if (module.trueWebComponentMode) {
                 if (initialRender) {
                     this.attachShadow({mode: "open"}).appendChild(templateRoot);
-                    router.runShadowJSScripts(this.shadowRoot, this.shadowRoot);
+                    await router.runShadowJSScripts(this.shadowRoot, this.shadowRoot);
                     if (this.id) {if (!module.shadowRoots) module.shadowRoots = {}; module.shadowRoots[this.id]=this.shadowRoot;}
                     else module.shadowRoot = this.shadowRoot;
                 }
-                else if (this.shadowRoot.firstChild) this.constructor._diffApplyDom(this.shadowRoot.firstChild, templateRoot);
+                else if (this.shadowRoot.firstChild) await this.constructor._diffApplyDom(this.shadowRoot.firstChild, templateRoot);
             }
             else {  
                 if (initialRender) {
                     this.appendChild(templateRoot); 
-                    router.runShadowJSScripts(templateRoot, document);
+                    await router.runShadowJSScripts(templateRoot, document);
                     templateRoot.getElementById = id => templateRoot.querySelector(`#${id}`);
                     if (this.id) {if (!module.shadowRoots) module.shadowRoots = {}; module.shadowRoots[this.id]=templateRoot;}
                     else module.shadowRoot = templateRoot;
-                } else if (this.firstChild) this.constructor._diffApplyDom(this.firstChild, templateRoot);
+                } else if (this.firstChild) await this.constructor._diffApplyDom(this.firstChild, templateRoot);
             }
 
             if (module.initialRender && initialRender) await module.initialRender(this);
@@ -116,8 +124,8 @@ function register(name, htmlTemplate, module) {
             if (this.hasAttribute("onload")) await eval(this.getAttribute("onload"));
             module.clearMemory(this.id);
             if (module.elementConnected) await module.elementConnected(this);
-            if (this.hasAttribute("roles")) eval(this.getAttribute("roles")).forEach(role => 
-                securityguard.addPermission(this.id ? name+this.id : name, role));
+            if (this.hasAttribute("roles")) for (const role of eval(this.getAttribute("roles"))) 
+                securityguard.addPermission(this.id ? name+this.id : name, role);
             
             this.render(true); 
         }
@@ -128,6 +136,10 @@ function register(name, htmlTemplate, module) {
 
             delete module.data;
             delete module.datas;
+        }
+
+        async attributeChangedCallback(name, oldValue, newValue) {
+            if (module.attributeChanged) await module.attributeChanged(this, name, oldValue, newValue);
         }
     });
 

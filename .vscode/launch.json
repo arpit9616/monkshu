@@ -10,23 +10,28 @@
             "type": "pwa-chrome",
             "url": "http://localhost:8080",
             "webRoot": "${workspaceFolder}/frontend",
-            "runtimeArgs": ["--media-cache-size=1", "--disk-cache-size=1"],
+            "runtimeArgs": ["--media-cache-size=1", "--disk-cache-size=1", "--preserve-symlinks"],
             "smartStep": true,
             "userDataDir": "${workspaceFolder}/.chrome",
-            "preLaunchTask": "Delete Chrome Profile"
+            "preLaunchTask": "Delete Chrome Profile",
+            "outFiles": ["${workspaceFolder}/frontend/**/*.js"]
         },
         {
             "type": "node",
             "request": "launch",
             "name": "Launch HTTPD",
             "cwd": "${workspaceFolder}/frontend/server",
-            "program": "${workspaceFolder}/frontend/server/server.js"
+            "program": "${workspaceFolder}/frontend/server/server.js",
+            "runtimeArgs": ["--preserve-symlinks"],
+            "outFiles": ["${workspaceFolder}/frontend/server/**/*.js"]
         },
         {
             "type": "node",
             "request": "launch",
             "name": "Launch Backend",
-            "program": "${workspaceFolder}/backend/server/server.js"
+            "program": "${workspaceFolder}/backend/server/server.js",
+            "runtimeArgs": ["--preserve-symlinks"],
+            "outFiles": ["${workspaceFolder}/backend/**/*.js"]
         }
     ]
 }
